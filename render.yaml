@@ -1,9 +1,11 @@
 services:
   - type: web
     name: alex-image-bot
-    env: python
+    runtime: image
+    repo: https://github.com/ppvekt-afk/alex-image-bot
+    plan: free
+    dockerCommand: python bot.py
     buildCommand: pip install -r requirements.txt
-    startCommand: python bot.py
     envVars:
       - key: TELEGRAM_BOT_TOKEN
         sync: false
