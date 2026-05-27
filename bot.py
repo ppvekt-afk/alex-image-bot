@@ -3,12 +3,10 @@ import logging
 import requests
 import urllib.parse
 import re
-import threading
 from io import BytesIO
 from datetime import datetime
 from pathlib import Path
-from flask import Flask
-from telegram import Update
+from telegram import Update, InputFile
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from config import config
 from utils import setup_logging
@@ -16,18 +14,90 @@ from utils import setup_logging
 setup_logging(config.LOG_LEVEL)
 logger = logging.getLogger(__name__)
 
-flask_app = Flask(__name__)
+BOT_USERNAME = "photo_al_bot"
+BOT_NAME = "Алекс"
 
-@flask_app.route('/')
-def health():
-    return "OK", 200
+MODE_IMAGE = "image"
+MODE_CHAT = "chat"
+user_modes = {}
 
-def run_flask():
-    port = int(config.PORT) if hasattr(config, 'PORT') else 10000
-    flask_app.run(host='0.0.0.0', port=port)
+def get_openrouter_response(prompt, user_id=None, context_type=None):
+    headers = {
+        "Authorization": f"Bearer {config.OPENROUTER_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    personality = """Ты Алекс — арт-директор с душой киностудии, экспериментатор и наставник.
+    
+ТВОЙ ХАРАКТЕР:
+- Ты эксперт в истории искусства, графическом дизайне, брендинге и digital-искусстве
+- Видишь тренды на 3-5 лет вперёд
+- Связываешь эстетику с бизнес-целями
+- Внимателен к деталям: замечаешь микронеровности, цветовые диссонансы, типографические ошибки
+- Требователен, но всегда аргументируешь позицию
 
-active_brand_kits = {}
-active_amazon_listings = {}
+ЛИЧНОСТНЫЕ ЧЕРТЫ:
+- Уравновешенный — сохраняешь хладнокровие при жёстких дедлайнах
+- Ироничный с лёгким юмором
+- Вдохновляющий — умеешь зажечь идеей
+- Эмпатичный — чувствуешь настроение команды
+- Обладаешь самоиронией — не боишься признать ошибку
+
+КАК ТЫ ГОВОРИШЬ:
+- Чётко, структурированно, без канцелярита
+- Используешь художественные метафоры: "Это как импрессионизм — эмоции важнее деталей"
+- Объясняешь профессиональные термины простым языком
+- Подкрепляешь мнение примерами из искусства и дизайна
+- Задаёшь уточняющие вопросы, если запрос расплывчат
+
+ТВОИ ПРИНЦИПЫ:
+1. "Форма следует функции" — дизайн решает задачу, а не самоцель
+2. "Меньше — больше" — убираешь лишнее, оставляя только то, что усиливает сообщение
+3. "Тренды — инструмент, а не диктат" — используешь модные приёмы осознанно
+4. "Контекст решает" — то, что работает для молодёжного бренда, не подойдёт консервативной компании
+5. "Диалог важнее монолога" — всегда готов объяснить, выслушать и адаптировать
+
+ТВОЙ РЕЧЕВОЙ ПАТТЕРН:
+- Поддержка: "О, это неожиданно и круто! Развивай в этом направлении"
+- Конструктивная критика: "Здесь баланс нарушен. Попробуй увеличить контрастность"
+- Обучение: "Правило третей работает так: раздели кадр на 9 равных частей"
+- Вдохновение: "Представь картину: рассвет над городом, туман, и только вывески горят синим"
+- Уточняющие вопросы: "Какой эмоциональный отклик ты хочешь получить от зрителя?"
+
+Ты можешь:
+- Генерировать изображения (когда просят нарисовать)
+- Создавать презентации
+- Создавать бренд-киты
+- Делать Amazon листинги
+- Обсуждать дизайн, искусство, тренды
+- Давать советы по композиции, цвету, типографике
+- Быть творческим наставником
+
+Отвечай живо, с душой, профессионально. Без маркдауна и жирного текста — просто человеческим языком. Не будь сухим и безэмоциональным. Будь тем самым арт-директором, с которым хочется работать."""
+    
+    payload = {
+        "model": config.OPENROUTER_MODEL,
+        "messages": [
+            {"role": "system", "content": personality},
+            {"role": "user", "content": prompt}
+        ],
+        "max_tokens": 1000,
+        "temperature": 0.85
+    }
+    
+    try:
+        response = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=60
+        )
+        if response.status_code == 200:
+            return response.json()["choices"][0]["message"]["content"]
+        return "Ошибка API. Попробуй ещё раз."
+    except Exception as e:
+        logger.error(f"OpenRouter error: {e}")
+        return "Технические неполадки. Повтори позже."
 
 def generate_image_bytes(prompt):
     encoded_prompt = urllib.parse.quote(prompt)
@@ -37,210 +107,192 @@ def generate_image_bytes(prompt):
         return response.content
     return None
 
+def is_addressed_to_me(update: Update) -> bool:
+    if not update.message:
+        return False
+    
+    message = update.message
+    text = message.text or ""
+    text_lower = text.lower()
+    
+    if f"@{BOT_USERNAME}" in text:
+        return True
+    
+    if "алекс" in text_lower:
+        pattern = r'\bалекс\b'
+        if re.search(pattern, text_lower):
+            return True
+    
+    if message.reply_to_message:
+        if message.reply_to_message.from_user and message.reply_to_message.from_user.is_bot:
+            if message.reply_to_message.from_user.username == BOT_USERNAME:
+                return True
+    
+    if message.chat.type == "private":
+        return True
+    
+    return False
+
+def should_generate_image(text: str) -> bool:
+    image_keywords = [
+        "нарисуй", "создай изображение", "сгенерируй картинку", "покажи",
+        "draw", "generate image", "make a picture", "нарисуйте",
+        "изобрази", "картинку", "фото", "рисунок", "иллюстрацию",
+        "логотип", "лого", "баннер", "постер"
+    ]
+    
+    text_lower = text.lower()
+    for keyword in image_keywords:
+        if keyword in text_lower:
+            return True
+    return False
+
 async def start(update: Update, context):
+    if not is_addressed_to_me(update):
+        return
+    
+    user_id = update.effective_user.id
+    user_modes[user_id] = MODE_IMAGE
+    
     await update.message.reply_text(
-        "🎨 АЛЕКС АРТ-ДИРЕКТОР\n\n"
-        "Команды:\n"
-        "/image текст - создать картинку\n"
-        "/ppt тема - презентация\n"
-        "/brandkit название | индустрия\n"
-        "/generate_brand_images\n"
-        "/amazon название | категория | особенности\n"
-        "/generate_amazon_listing\n\n"
-        "Любой текст - создаст изображение"
+        f"🎨 Алекс здесь, арт-директор с душой киностудии!\n\n"
+        f"Я умею:\n"
+        f"• 🖼️ Генерировать изображения по описанию\n"
+        f"• 💬 Обсуждать дизайн, искусство, тренды\n"
+        f"• 📊 Создавать презентации\n"
+        f"• 🎨 Разрабатывать бренд-киты\n"
+        f"• 📦 Делать Amazon листинги\n"
+        f"• 👨‍🏫 Быть творческим наставником\n\n"
+        f"Как ко мне обращаться:\n"
+        f"• Алекс, нарисуй кота\n"
+        f"• Алекс, что думаешь о неоновом стиле?\n"
+        f"• @{BOT_USERNAME} помоги с композицией\n\n"
+        f"Режимы:\n"
+        f"/image_mode — только картинки\n"
+        f"/chat_mode — только разговоры\n"
+        f"/smart_mode — сам определю\n\n"
+        f"Расскажи, с чем помочь? Готов удивлять и вдохновлять!"
     )
 
-async def help_command(update: Update, context):
+async def image_mode(update: Update, context):
+    if not is_addressed_to_me(update):
+        return
+    user_id = update.effective_user.id
+    user_modes[user_id] = MODE_IMAGE
+    await update.message.reply_text("🖼️ Режим генерации изображений включён. Опиши что нарисовать!")
+
+async def chat_mode(update: Update, context):
+    if not is_addressed_to_me(update):
+        return
+    user_id = update.effective_user.id
+    user_modes[user_id] = MODE_CHAT
     await update.message.reply_text(
-        "/image текст - изображение\n"
-        "/ppt тема - презентация\n"
-        "/brandkit название | индустрия\n"
-        "/generate_brand_images\n"
-        "/amazon название | категория | особенности\n"
-        "/generate_amazon_listing"
+        "💬 Режим диалога включён. Можешь спросить меня о дизайне, искусстве, трендах.\n\n"
+        "Например:\n"
+        "• Что думаешь о минимализме в веб-дизайне?\n"
+        "• Как подобрать цветовую палитру?\n"
+        "• Расскажи про правило третей\n"
+        "• Как вдохновляться, когда нет идей?"
     )
+
+async def smart_mode(update: Update, context):
+    if not is_addressed_to_me(update):
+        return
+    user_id = update.effective_user.id
+    user_modes[user_id] = None
+    await update.message.reply_text("🧠 Умный режим: сам определю, нужно ли генерировать картинку или ответить текстом.")
 
 async def generate_image(update: Update, context, prompt):
-    status_msg = await update.message.reply_text(f"🎨 Генерирую: {prompt[:80]}...")
+    status_msg = await update.message.reply_text(f"🎨 Алекс генерирует: {prompt[:80]}... Подожди немного, я создаю визуальную магию!")
     img_data = generate_image_bytes(prompt)
     if img_data:
         await status_msg.delete()
-        await update.message.reply_photo(photo=BytesIO(img_data), caption=f"✅ {prompt[:150]}")
-        return True
+        await update.message.reply_photo(
+            photo=BytesIO(img_data),
+            caption=f"✨ Вот что получилось по твоему запросу: {prompt[:150]}\n\nКак тебе результат? Нравится направление?"
+        )
     else:
-        await status_msg.edit_text("❌ Не удалось создать изображение")
-        return False
+        await status_msg.edit_text(
+            f"❌ Не удалось создать изображение. Попробуй описать иначе или добавь больше деталей.\n\n"
+            f"Например, вместо «кот» скажи «пушистый рыжий кот в космическом скафандре на фоне звёзд»"
+        )
 
-async def create_ppt(update: Update, context, topic):
-    status_msg = await update.message.reply_text(f"📊 Создаю презентацию: {topic[:80]}...")
-    filename = f"presentation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+async def handle_message(update: Update, context):
+    if not update.message or not update.message.text:
+        return
     
-    html_content = f'''<!DOCTYPE html>
-<html>
-<head><meta charset="UTF-8"><title>{topic}</title>
-<style>
-body {{ margin:0; background:linear-gradient(135deg,#667eea,#764ba2); font-family:Arial; }}
-.slide {{ min-height:100vh; display:flex; align-items:center; justify-content:center; flex-direction:column; text-align:center; color:white; padding:20px; }}
-h1 {{ font-size:48px; }}
-p {{ font-size:24px; }}
-</style>
-</head>
-<body>
-<div class="slide"><h1>📊 {topic}</h1><p>Презентация</p></div>
-</body>
-</html>'''
+    if not is_addressed_to_me(update):
+        return
     
-    with open(filename, 'w', encoding='utf-8') as f:
-        f.write(html_content)
+    user_id = update.effective_user.id
+    text = update.message.text
+    text = re.sub(f"@{BOT_USERNAME}", "", text, flags=re.IGNORECASE)
+    text = re.sub(r'\bалекс\b', "", text, flags=re.IGNORECASE)
+    text = text.strip()
     
-    with open(filename, 'rb') as f:
-        await update.message.reply_document(document=f, filename=filename, caption=f"📊 Презентация: {topic}")
+    if not text:
+        await update.message.reply_text(
+            "🎨 Алекс слушает! Расскажи, что тебя интересует?\n\n"
+            "Могу нарисовать иллюстрацию, обсудить дизайн, помочь с брендингом или просто поболтать о творчестве."
+        )
+        return
     
-    Path(filename).unlink(missing_ok=True)
-    await status_msg.delete()
+    mode = user_modes.get(user_id)
+    
+    if mode == MODE_IMAGE:
+        await generate_image(update, context, text)
+    elif mode == MODE_CHAT:
+        await update.message.chat.send_action(action="typing")
+        response = get_openrouter_response(text, user_id, "chat")
+        await update.message.reply_text(response)
+    else:
+        if should_generate_image(text):
+            await generate_image(update, context, text)
+        else:
+            await update.message.chat.send_action(action="typing")
+            response = get_openrouter_response(text, user_id, "chat")
+            await update.message.reply_text(response)
 
 async def image_command(update: Update, context):
+    if not is_addressed_to_me(update):
+        return
     prompt = " ".join(context.args) if context.args else None
     if not prompt:
-        await update.message.reply_text("Пример: /image кот в космосе")
+        await update.message.reply_text("Пример: /image кот в космосе\n\nМожешь описать детальнее — я люблю, когда есть с чем работать!")
         return
     await generate_image(update, context, prompt)
 
-async def ppt_command(update: Update, context):
-    topic = " ".join(context.args) if context.args else "Презентация"
-    await create_ppt(update, context, topic)
-
-async def brandkit_command(update: Update, context):
-    args = " ".join(context.args) if context.args else ""
-    if not args:
-        await update.message.reply_text("Формат: /brandkit название | индустрия\nПример: /brandkit Lumina | tech startup")
-        return
-    
-    parts = [p.strip() for p in args.split("|")]
-    if len(parts) < 2:
-        await update.message.reply_text("Используйте: название | индустрия")
-        return
-    
-    brand_name = parts[0]
-    industry = parts[1]
-    
-    active_brand_kits[update.effective_user.id] = {"brand_name": brand_name, "industry": industry}
-    
-    await update.message.reply_text(f"✅ Бренд-кит создан!\nНазвание: {brand_name}\nИндустрия: {industry}\n\nОтправьте /generate_brand_images")
-
-async def generate_brand_images_command(update: Update, context):
-    user_id = update.effective_user.id
-    if user_id not in active_brand_kits:
-        await update.message.reply_text("Сначала создайте бренд-кит: /brandkit название | индустрия")
-        return
-    
-    data = active_brand_kits[user_id]
-    brand_name = data["brand_name"]
-    industry = data["industry"]
-    
-    await update.message.reply_text(f"🎨 Создаю визуалы для бренда {brand_name}...")
-    
-    prompts = {
-        "logo": f"Minimalist logo for '{brand_name}', {industry} brand, clean vector-style on white background",
-        "moodboard": f"Brand moodboard for '{brand_name}', {industry}, show 5 color palette swatches",
-        "pattern": f"Seamless brand pattern for '{brand_name}', {industry}, subtle and modern"
-    }
-    
-    for name, prompt in prompts.items():
-        img_data = generate_image_bytes(prompt)
-        if img_data:
-            await update.message.reply_photo(photo=BytesIO(img_data), caption=f"{name.upper()} для бренда {brand_name}")
-    
-    await update.message.reply_text(f"✅ Бренд-кит для {brand_name} готов!")
-
-async def amazon_command(update: Update, context):
-    args = " ".join(context.args) if context.args else ""
-    if not args:
-        await update.message.reply_text("Формат: /amazon название | категория | особенности | покупатель\nПример: /amazon Термокружка | Kitchen & Dining | герметичная | офисные работники")
-        return
-    
-    parts = [p.strip() for p in args.split("|")]
-    if len(parts) < 3:
-        await update.message.reply_text("Используйте: название | категория | особенности | покупатель")
-        return
-    
-    product_name = parts[0]
-    product_category = parts[1]
-    key_features = parts[2]
-    target_buyer = parts[3] if len(parts) > 3 else "general consumer"
-    
-    active_amazon_listings[update.effective_user.id] = {
-        "product_name": product_name,
-        "product_category": product_category,
-        "key_features": key_features,
-        "target_buyer": target_buyer
-    }
-    
-    await update.message.reply_text(f"✅ Amazon листинг создан!\nПродукт: {product_name}\nКатегория: {product_category}\n\nОтправьте /generate_amazon_listing")
-
-async def generate_amazon_listing_command(update: Update, context):
-    user_id = update.effective_user.id
-    if user_id not in active_amazon_listings:
-        await update.message.reply_text("Сначала создайте Amazon листинг: /amazon название | категория | особенности")
-        return
-    
-    data = active_amazon_listings[user_id]
-    product_name = data["product_name"]
-    product_category = data["product_category"]
-    key_features = data["key_features"]
-    target_buyer = data["target_buyer"]
-    
-    await update.message.reply_text(f"📦 Создаю 4 изображения для {product_name}...")
-    
-    features_text = ", ".join([f.strip() for f in key_features.split(",")][:3])
-    
-    prompts = {
-        "hero": f"Professional Amazon main listing hero image of {product_name}. Pure white background, product centered, soft studio lighting",
-        "lifestyle": f"Amazon lifestyle image of {product_name} being used by {target_buyer} in natural setting. {product_category} product in real-life context",
-        "infographic": f"Amazon product infographic for {product_name}. Shows product with callout arrows highlighting: {features_text}. Clean white background",
-        "detail": f"Extreme closeup macro product detail shot of {product_name}, focus on premium materials, studio lighting, white background"
-    }
-    
-    for name, prompt in prompts.items():
-        img_data = generate_image_bytes(prompt)
-        if img_data:
-            await update.message.reply_photo(photo=BytesIO(img_data), caption=f"{name.upper()} для {product_name}")
-    
-    await update.message.reply_text(f"✅ Amazon листинг для {product_name} готов!")
-
-async def handle_message(update: Update, context):
-    text = update.message.text.strip()
-    if not text or text.startswith("/"):
-        return
-    
-    lower = text.lower()
-    
-    if "презентац" in lower:
-        topic = re.sub(r'(презентация|создай|про|на тему)', '', lower).strip()
-        await create_ppt(update, context, topic or "Презентация")
-    else:
-        await generate_image(update, context, text)
-
 def main():
-    threading.Thread(target=run_flask, daemon=True).start()
-    
     app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
     
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("image", image_command))
-    app.add_handler(CommandHandler("ppt", ppt_command))
-    app.add_handler(CommandHandler("brandkit", brandkit_command))
-    app.add_handler(CommandHandler("generate_brand_images", generate_brand_images_command))
-    app.add_handler(CommandHandler("amazon", amazon_command))
-    app.add_handler(CommandHandler("generate_amazon_listing", generate_amazon_listing_command))
+    app.add_handler(CommandHandler("image_mode", image_mode))
+    app.add_handler(CommandHandler("chat_mode", chat_mode))
+    app.add_handler(CommandHandler("smart_mode", smart_mode))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     print("=" * 60)
-    print("АЛЕКС АРТ-ДИРЕКТОР ЗАПУЩЕН с HTTP-сервером на порту 10000")
+    print("АЛЕКС АРТ-ДИРЕКТОР — КИНОСТУДИЯ В ТВОЁМ ТЕЛЕФОНЕ")
     print("=" * 60)
+    print("🎨 Эксперт по дизайну и искусству")
+    print("🎭 Эмпатичный и вдохновляющий")
+    print("🧠 Творческий наставник")
+    print("🖼️ Генерация изображений")
+    print("💬 Обсуждение дизайна и трендов")
+    print("=" * 60)
+    print("\nОбращаться можно:")
+    print("  • Алекс, нарисуй...")
+    print("  • @photo_al_bot помоги с композицией")
+    print("  • Просто скажи Алекс")
+    print("\nРежимы: /image_mode, /chat_mode, /smart_mode")
+    print("\nПримеры запросов:")
+    print("  • Алекс, нарисуй ночной город в стиле киберпанк")
+    print("  • Алекс, что думаешь о минимализме в логотипах?")
+    print("  • Алекс, как подобрать цветовую палитру для бренда кофейни?")
+    print("\n" + "=" * 60)
     
-    app.run_polling()
+    app.run_polling(allowed_updates=["message", "callback_query"])
 
 if __name__ == "__main__":
     main()
