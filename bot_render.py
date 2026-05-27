@@ -7,7 +7,8 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from config import config
 from utils import setup_logging
-from voice_handlers import handle_voice_message, init_asr
+from voice_handlers import handle_voice_message
+from tts_service import tts_service
 
 setup_logging(config.LOG_LEVEL)
 logger = logging.getLogger(__name__)
@@ -16,11 +17,7 @@ flask_app = Flask(__name__)
 
 @flask_app.route('/')
 def health():
-    return jsonify({"status": "alive", "service": "alex-image-bot"})
-
-@flask_app.route('/health')
-def health_check():
-    return jsonify({"status": "ok"})
+    return jsonify({"status": "alive"})
 
 def run_flask():
     flask_app.run(host='0.0.0.0', port=10000, debug=False, use_reloader=False)
@@ -31,8 +28,8 @@ async def start(update: Update, context):
         "Я умею:\n"
         "• 🖼️ Генерировать изображения\n"
         "• 🎤 Распознавать голосовые сообщения\n"
-        "• 💬 Отвечать на вопросы\n\n"
-        "Просто напиши или отправь голосовое сообщение!"
+        "• 🔊 Отвечать голосом\n\n"
+        "Просто отправь голосовое сообщение или напиши текст!"
     )
 
 async def generate_image(update: Update, context, prompt):
@@ -58,17 +55,15 @@ async def handle_message(update: Update, context):
     if not update.message or not update.message.text:
         return
     
-    text = update.message.text
-    text = text.strip()
-    
+    text = update.message.text.strip()
     if not text:
         return
     
-    if "нарисуй" in text.lower() or "создай" in text.lower() or "изобрази" in text.lower():
+    if any(k in text.lower() for k in ["нарисуй", "создай", "изобрази"]):
         await generate_image(update, context, text)
     else:
         await update.message.reply_text(
-            "Чтобы сгенерировать изображение, напиши: 'Алекс, нарисуй ...'\n"
+            "Чтобы сгенерировать изображение, напиши: 'Алекс, нарисуй ...'\n\n"
             "Или отправь голосовое сообщение!"
         )
 
@@ -76,17 +71,14 @@ def main():
     threading.Thread(target=run_flask, daemon=True).start()
     time.sleep(2)
     
-    init_asr()
+    tts_service.initialize()
     
     app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice_message))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    print("=" * 50)
-    print("АЛЕКС ЗАПУЩЕН с голосовыми сообщениями")
-    print("=" * 50)
-    
+    print("АЛЕКС ЗАПУЩЕН с голосом!")
     app.run_polling()
 
 if __name__ == "__main__":

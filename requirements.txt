@@ -2,3 +2,5 @@ python-telegram-bot==21.10
 python-dotenv==1.0.0
 requests==2.31.0
 Flask==3.0.0
+google-cloud-texttospeech==2.36.0
+speechbrain==1.1.0

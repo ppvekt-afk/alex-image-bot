@@ -2,12 +2,13 @@ import logging
 import os
 import re
 import tempfile
-from telegram import Update, Voice
+from io import BytesIO
+from telegram import Update
 from telegram.ext import ContextTypes
+from tts_service import tts_service
 
 logger = logging.getLogger(__name__)
 
-# Инициализация модели SpeechBrain
 asr_model = None
 
 def init_asr():
@@ -53,11 +54,10 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
     
     status_msg = await update.message.reply_text("🎤 Распознаю голос...")
     
-    voice: Voice = update.message.voice
-    voice_path = await download_voice(context.bot, voice.file_id)
+    voice_path = await download_voice(context.bot, update.message.voice.file_id)
     
     if not voice_path:
-        await status_msg.edit_text("❌ Не удалось загрузить голосовое сообщение.")
+        await status_msg.edit_text("❌ Не удалось загрузить.")
         return
     
     transcript = await transcribe_voice(voice_path)
@@ -73,14 +73,9 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
             "Content-Type": "application/json"
         }
         
-        personality = """Ты Алекс — арт-директор. Отвечай как человек: коротко, по делу, с душой."""
-        
         payload = {
             "model": config.OPENROUTER_MODEL,
-            "messages": [
-                {"role": "system", "content": personality},
-                {"role": "user", "content": transcript}
-            ],
+            "messages": [{"role": "user", "content": transcript}],
             "max_tokens": 500,
             "temperature": 0.7
         }
@@ -95,15 +90,28 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
             if response.status_code == 200:
                 ai_response = response.json()["choices"][0]["message"]["content"]
                 ai_response = re.sub(r'\*\*(.+?)\*\*', r'\1', ai_response)
-                await status_msg.edit_text(f"📝 Распознано: {transcript}\n\n🧠 {ai_response}")
+                
+                audio_data = tts_service.synthesize_speech(ai_response[:500])
+                
+                if audio_data:
+                    audio_file = BytesIO(audio_data)
+                    audio_file.name = "response.ogg"
+                    await update.message.reply_voice(voice=audio_file)
+                    await status_msg.delete()
+                else:
+                    await status_msg.edit_text(f"📝 Распознано: {transcript}\n\n🧠 {ai_response}")
             else:
-                await status_msg.edit_text(f"📝 Распознано: {transcript}\n\nИзвини, ошибка API.")
+                await status_msg.edit_text(f"📝 Распознано: {transcript}\n\nИзвини, ошибка.")
         except Exception as e:
             logger.error(f"OpenRouter error: {e}")
-            await status_msg.edit_text(f"📝 Распознано: {transcript}\n\nИзвини, ошибка связи.")
+            await status_msg.edit_text(f"📝 Распознано: {transcript}\n\nОшибка связи.")
         
         os.unlink(voice_path)
     else:
-        await status_msg.edit_text("❌ Не удалось распознать речь. Попробуйте говорить чётче.")
+        await status_msg.edit_text("❌ Не удалось распознать речь.")
+
+def init_tts():
+    tts_service.initialize()
 
 init_asr()
+init_tts()
