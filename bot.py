@@ -6,7 +6,8 @@ import re
 from io import BytesIO
 from datetime import datetime
 from pathlib import Path
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from config import config
 from utils import setup_logging
 
@@ -24,8 +25,8 @@ def generate_image_bytes(prompt):
         return response.content
     return None
 
-def start(update, context):
-    update.message.reply_text(
+async def start(update: Update, context):
+    await update.message.reply_text(
         "🎨 АЛЕКС АРТ-ДИРЕКТОР\n\n"
         "Команды:\n"
         "/image текст - создать картинку\n"
@@ -37,8 +38,8 @@ def start(update, context):
         "Любой текст - создаст изображение"
     )
 
-def help_command(update, context):
-    update.message.reply_text(
+async def help_command(update: Update, context):
+    await update.message.reply_text(
         "/image текст - изображение\n"
         "/ppt тема - презентация\n"
         "/brandkit название | индустрия\n"
@@ -47,19 +48,19 @@ def help_command(update, context):
         "/generate_amazon_listing"
     )
 
-def generate_image(update, context, prompt):
-    status_msg = update.message.reply_text(f"🎨 Генерирую: {prompt[:80]}...")
+async def generate_image(update: Update, context, prompt):
+    status_msg = await update.message.reply_text(f"🎨 Генерирую: {prompt[:80]}...")
     img_data = generate_image_bytes(prompt)
     if img_data:
-        status_msg.delete()
-        update.message.reply_photo(photo=BytesIO(img_data), caption=f"✅ {prompt[:150]}")
+        await status_msg.delete()
+        await update.message.reply_photo(photo=BytesIO(img_data), caption=f"✅ {prompt[:150]}")
         return True
     else:
-        status_msg.edit_text("❌ Не удалось создать изображение")
+        await status_msg.edit_text("❌ Не удалось создать изображение")
         return False
 
-def create_ppt(update, context, topic):
-    status_msg = update.message.reply_text(f"📊 Создаю презентацию: {topic[:80]}...")
+async def create_ppt(update: Update, context, topic):
+    status_msg = await update.message.reply_text(f"📊 Создаю презентацию: {topic[:80]}...")
     filename = f"presentation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
     
     html_content = f'''<!DOCTYPE html>
@@ -81,31 +82,31 @@ p {{ font-size:24px; }}
         f.write(html_content)
     
     with open(filename, 'rb') as f:
-        update.message.reply_document(document=f, filename=filename, caption=f"📊 Презентация: {topic}")
+        await update.message.reply_document(document=f, filename=filename, caption=f"📊 Презентация: {topic}")
     
     Path(filename).unlink(missing_ok=True)
-    status_msg.delete()
+    await status_msg.delete()
 
-def image_command(update, context):
+async def image_command(update: Update, context):
     prompt = " ".join(context.args) if context.args else None
     if not prompt:
-        update.message.reply_text("Пример: /image кот в космосе")
+        await update.message.reply_text("Пример: /image кот в космосе")
         return
-    generate_image(update, context, prompt)
+    await generate_image(update, context, prompt)
 
-def ppt_command(update, context):
+async def ppt_command(update: Update, context):
     topic = " ".join(context.args) if context.args else "Презентация"
-    create_ppt(update, context, topic)
+    await create_ppt(update, context, topic)
 
-def brandkit_command(update, context):
+async def brandkit_command(update: Update, context):
     args = " ".join(context.args) if context.args else ""
     if not args:
-        update.message.reply_text("Формат: /brandkit название | индустрия\nПример: /brandkit Lumina | tech startup")
+        await update.message.reply_text("Формат: /brandkit название | индустрия\nПример: /brandkit Lumina | tech startup")
         return
     
     parts = [p.strip() for p in args.split("|")]
     if len(parts) < 2:
-        update.message.reply_text("Используйте: название | индустрия")
+        await update.message.reply_text("Используйте: название | индустрия")
         return
     
     brand_name = parts[0]
@@ -113,19 +114,19 @@ def brandkit_command(update, context):
     
     active_brand_kits[update.effective_user.id] = {"brand_name": brand_name, "industry": industry}
     
-    update.message.reply_text(f"✅ Бренд-кит создан!\nНазвание: {brand_name}\nИндустрия: {industry}\n\nОтправьте /generate_brand_images")
+    await update.message.reply_text(f"✅ Бренд-кит создан!\nНазвание: {brand_name}\nИндустрия: {industry}\n\nОтправьте /generate_brand_images")
 
-def generate_brand_images_command(update, context):
+async def generate_brand_images_command(update: Update, context):
     user_id = update.effective_user.id
     if user_id not in active_brand_kits:
-        update.message.reply_text("Сначала создайте бренд-кит: /brandkit название | индустрия")
+        await update.message.reply_text("Сначала создайте бренд-кит: /brandkit название | индустрия")
         return
     
     data = active_brand_kits[user_id]
     brand_name = data["brand_name"]
     industry = data["industry"]
     
-    update.message.reply_text(f"🎨 Создаю визуалы для бренда {brand_name}...")
+    await update.message.reply_text(f"🎨 Создаю визуалы для бренда {brand_name}...")
     
     prompts = {
         "logo": f"Minimalist logo for '{brand_name}', {industry} brand, clean vector-style on white background",
@@ -136,19 +137,19 @@ def generate_brand_images_command(update, context):
     for name, prompt in prompts.items():
         img_data = generate_image_bytes(prompt)
         if img_data:
-            update.message.reply_photo(photo=BytesIO(img_data), caption=f"{name.upper()} для {brand_name}")
+            await update.message.reply_photo(photo=BytesIO(img_data), caption=f"{name.upper()} для {brand_name}")
     
-    update.message.reply_text(f"✅ Бренд-кит для {brand_name} готов!")
+    await update.message.reply_text(f"✅ Бренд-кит для {brand_name} готов!")
 
-def amazon_command(update, context):
+async def amazon_command(update: Update, context):
     args = " ".join(context.args) if context.args else ""
     if not args:
-        update.message.reply_text("Формат: /amazon название | категория | особенности | покупатель\nПример: /amazon Термокружка | Kitchen & Dining | герметичная | офисные работники")
+        await update.message.reply_text("Формат: /amazon название | категория | особенности | покупатель\nПример: /amazon Термокружка | Kitchen & Dining | герметичная | офисные работники")
         return
     
     parts = [p.strip() for p in args.split("|")]
     if len(parts) < 3:
-        update.message.reply_text("Используйте: название | категория | особенности | покупатель")
+        await update.message.reply_text("Используйте: название | категория | особенности | покупатель")
         return
     
     product_name = parts[0]
@@ -163,12 +164,12 @@ def amazon_command(update, context):
         "target_buyer": target_buyer
     }
     
-    update.message.reply_text(f"✅ Amazon листинг создан!\nПродукт: {product_name}\nКатегория: {product_category}\n\nОтправьте /generate_amazon_listing")
+    await update.message.reply_text(f"✅ Amazon листинг создан!\nПродукт: {product_name}\nКатегория: {product_category}\n\nОтправьте /generate_amazon_listing")
 
-def generate_amazon_listing_command(update, context):
+async def generate_amazon_listing_command(update: Update, context):
     user_id = update.effective_user.id
     if user_id not in active_amazon_listings:
-        update.message.reply_text("Сначала создайте Amazon листинг: /amazon название | категория | особенности")
+        await update.message.reply_text("Сначала создайте Amazon листинг: /amazon название | категория | особенности")
         return
     
     data = active_amazon_listings[user_id]
@@ -177,7 +178,7 @@ def generate_amazon_listing_command(update, context):
     key_features = data["key_features"]
     target_buyer = data["target_buyer"]
     
-    update.message.reply_text(f"📦 Создаю 4 изображения для {product_name}...")
+    await update.message.reply_text(f"📦 Создаю 4 изображения для {product_name}...")
     
     features_text = ", ".join([f.strip() for f in key_features.split(",")][:3])
     
@@ -191,11 +192,11 @@ def generate_amazon_listing_command(update, context):
     for name, prompt in prompts.items():
         img_data = generate_image_bytes(prompt)
         if img_data:
-            update.message.reply_photo(photo=BytesIO(img_data), caption=f"{name.upper()} для {product_name}")
+            await update.message.reply_photo(photo=BytesIO(img_data), caption=f"{name.upper()} для {product_name}")
     
-    update.message.reply_text(f"✅ Amazon листинг для {product_name} готов!")
+    await update.message.reply_text(f"✅ Amazon листинг для {product_name} готов!")
 
-def handle_message(update, context):
+async def handle_message(update: Update, context):
     text = update.message.text.strip()
     if not text or text.startswith("/"):
         return
@@ -204,30 +205,28 @@ def handle_message(update, context):
     
     if "презентац" in lower:
         topic = re.sub(r'(презентация|создай|про|на тему)', '', lower).strip()
-        create_ppt(update, context, topic or "Презентация")
+        await create_ppt(update, context, topic or "Презентация")
     else:
-        generate_image(update, context, text)
+        await generate_image(update, context, text)
 
 def main():
-    updater = Updater(config.TELEGRAM_BOT_TOKEN, use_context=True)
-    dp = updater.dispatcher
+    app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
     
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("help", help_command))
-    dp.add_handler(CommandHandler("image", image_command))
-    dp.add_handler(CommandHandler("ppt", ppt_command))
-    dp.add_handler(CommandHandler("brandkit", brandkit_command))
-    dp.add_handler(CommandHandler("generate_brand_images", generate_brand_images_command))
-    dp.add_handler(CommandHandler("amazon", amazon_command))
-    dp.add_handler(CommandHandler("generate_amazon_listing", generate_amazon_listing_command))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("image", image_command))
+    app.add_handler(CommandHandler("ppt", ppt_command))
+    app.add_handler(CommandHandler("brandkit", brandkit_command))
+    app.add_handler(CommandHandler("generate_brand_images", generate_brand_images_command))
+    app.add_handler(CommandHandler("amazon", amazon_command))
+    app.add_handler(CommandHandler("generate_amazon_listing", generate_amazon_listing_command))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     print("=" * 60)
     print("АЛЕКС АРТ-ДИРЕКТОР ЗАПУЩЕН на Python 3.11")
     print("=" * 60)
     
-    updater.start_polling()
-    updater.idle()
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
