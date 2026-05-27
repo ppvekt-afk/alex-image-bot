@@ -3,9 +3,11 @@ import logging
 import requests
 import urllib.parse
 import re
+import threading
 from io import BytesIO
 from datetime import datetime
 from pathlib import Path
+from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from config import config
@@ -13,6 +15,16 @@ from utils import setup_logging
 
 setup_logging(config.LOG_LEVEL)
 logger = logging.getLogger(__name__)
+
+flask_app = Flask(__name__)
+
+@flask_app.route('/')
+def health():
+    return "OK", 200
+
+def run_flask():
+    port = int(config.PORT) if hasattr(config, 'PORT') else 10000
+    flask_app.run(host='0.0.0.0', port=port)
 
 active_brand_kits = {}
 active_amazon_listings = {}
@@ -130,14 +142,14 @@ async def generate_brand_images_command(update: Update, context):
     
     prompts = {
         "logo": f"Minimalist logo for '{brand_name}', {industry} brand, clean vector-style on white background",
-        "moodboard": f"Brand moodboard for {brand_name}, {industry}, show 5 color palette swatches",
-        "pattern": f"Seamless brand pattern for {brand_name}, {industry}, subtle and modern"
+        "moodboard": f"Brand moodboard for '{brand_name}', {industry}, show 5 color palette swatches",
+        "pattern": f"Seamless brand pattern for '{brand_name}', {industry}, subtle and modern"
     }
     
     for name, prompt in prompts.items():
         img_data = generate_image_bytes(prompt)
         if img_data:
-            await update.message.reply_photo(photo=BytesIO(img_data), caption=f"{name.upper()} для {brand_name}")
+            await update.message.reply_photo(photo=BytesIO(img_data), caption=f"{name.upper()} для бренда {brand_name}")
     
     await update.message.reply_text(f"✅ Бренд-кит для {brand_name} готов!")
 
@@ -210,6 +222,8 @@ async def handle_message(update: Update, context):
         await generate_image(update, context, text)
 
 def main():
+    threading.Thread(target=run_flask, daemon=True).start()
+    
     app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
     
     app.add_handler(CommandHandler("start", start))
@@ -223,7 +237,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     print("=" * 60)
-    print("АЛЕКС АРТ-ДИРЕКТОР ЗАПУЩЕН на Python 3.11")
+    print("АЛЕКС АРТ-ДИРЕКТОР ЗАПУЩЕН с HTTP-сервером на порту 10000")
     print("=" * 60)
     
     app.run_polling()
