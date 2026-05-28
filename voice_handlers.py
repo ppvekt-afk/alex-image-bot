@@ -3,7 +3,7 @@ import os
 import re
 import tempfile
 from io import BytesIO
-from telegram import Update
+from telegram import Update, Voice
 from telegram.ext import ContextTypes
 from tts_service import tts_service
 
@@ -109,9 +109,3 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
         os.unlink(voice_path)
     else:
         await status_msg.edit_text("❌ Не удалось распознать речь.")
-
-def init_tts():
-    tts_service.initialize()
-
-init_asr()
-init_tts()
