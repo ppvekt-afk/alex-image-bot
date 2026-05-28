@@ -4,7 +4,7 @@ import requests
 import urllib.parse
 import re
 from io import BytesIO
-from telegram import Update, InputFile
+from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from config import config
 from utils import setup_logging
@@ -13,8 +13,7 @@ setup_logging(config.LOG_LEVEL)
 logger = logging.getLogger(__name__)
 
 BOT_USERNAME = "photo_al_bot"
-BOT_NAME = "Алекс"
-BOT_NAME_LOWER = "алекс"
+BOT_ID = "8552364756"  # ID вашего бота Алекса
 
 def generate_image_bytes(prompt):
     encoded_prompt = urllib.parse.quote(prompt)
@@ -24,44 +23,40 @@ def generate_image_bytes(prompt):
         return response.content
     return None
 
-def is_addressed_to_me(update: Update) -> bool:
+def is_mentioned(update: Update) -> bool:
     if not update.message:
         return False
     
     message = update.message
     text = message.text or ""
-    text_lower = text.lower()
     
+    # ТОЛЬКО прямое упоминание @username
     if f"@{BOT_USERNAME}" in text:
         return True
     
-    if BOT_NAME_LOWER in text_lower:
-        pattern = r'\b' + re.escape(BOT_NAME_LOWER) + r'\b'
-        if re.search(pattern, text_lower):
+    # Ответ на сообщение этого бота
+    if message.reply_to_message:
+        if message.reply_to_message.from_user and message.reply_to_message.from_user.id == int(BOT_ID):
             return True
     
-    if message.reply_to_message:
-        if message.reply_to_message.from_user and message.reply_to_message.from_user.is_bot:
-            if message.reply_to_message.from_user.username == BOT_USERNAME:
-                return True
-    
+    # Личный чат
     if message.chat.type == "private":
         return True
     
     return False
 
 async def start(update: Update, context):
-    if not is_addressed_to_me(update):
+    if not is_mentioned(update):
         return
     await update.message.reply_text(
-        f"🎨 {BOT_NAME} здесь!\n\n"
-        f"Обращаться ко мне можно:\n"
-        f"• @{BOT_USERNAME}\n"
-        f"• {BOT_NAME}\n\n"
-        f"Пример: {BOT_NAME}, нарисуй кота в космосе"
+        "🎨 Алекс здесь!\n\n"
+        "Упомяните меня @photo_al_bot, чтобы я создал изображение.\n"
+        "Пример: @photo_al_bot кот в космосе"
     )
 
 async def generate_image(update: Update, context, prompt):
+    if not is_mentioned(update):
+        return
     status_msg = await update.message.reply_text(f"🎨 Генерирую: {prompt[:80]}...")
     img_data = generate_image_bytes(prompt)
     if img_data:
@@ -74,22 +69,25 @@ async def handle_message(update: Update, context):
     if not update.message or not update.message.text:
         return
     
-    if not is_addressed_to_me(update):
+    if not is_mentioned(update):
         return
     
     text = update.message.text
+    # Убираем ТОЛЬКО своё упоминание
     text = re.sub(f"@{BOT_USERNAME}", "", text, flags=re.IGNORECASE)
-    text = re.sub(r'\b' + re.escape(BOT_NAME_LOWER) + r'\b', "", text, flags=re.IGNORECASE)
     text = text.strip()
     
     if not text:
-        await update.message.reply_text(f"Да, {BOT_NAME} на связи! Что сгенерировать?")
+        return
+    
+    # Не реагируем на упоминания других ботов
+    if "@photo_al_bot" not in update.message.text and "@masha_editor_bot" in update.message.text:
         return
     
     await generate_image(update, context, text)
 
 async def image_command(update: Update, context):
-    if not is_addressed_to_me(update):
+    if not is_mentioned(update):
         return
     prompt = " ".join(context.args) if context.args else None
     if not prompt:
@@ -105,8 +103,8 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     print("=" * 50)
-    print(f"{BOT_NAME} ЗАПУЩЕН")
-    print(f"Реагирует на: @{BOT_USERNAME}, {BOT_NAME}, {BOT_NAME.lower()}")
+    print(f"АЛЕКС ЗАПУЩЕН")
+    print(f"Реагирует только на: @{BOT_USERNAME}")
     print("=" * 50)
     
     app.run_polling(allowed_updates=["message", "callback_query"])

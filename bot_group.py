@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 
 BOT_USERNAME = "photo_al_bot"
 BOT_NAME = "Алекс"
-BOT_NAME_LOWER = "алекс"
 
 def generate_image_bytes(prompt):
     encoded_prompt = urllib.parse.quote(prompt)
@@ -24,44 +23,33 @@ def generate_image_bytes(prompt):
         return response.content
     return None
 
-def is_addressed_to_me(update: Update) -> bool:
+def is_mentioned(update: Update) -> bool:
     if not update.message:
         return False
-    
-    message = update.message
-    text = message.text or ""
-    text_lower = text.lower()
-    
+    text = update.message.text or ""
     if f"@{BOT_USERNAME}" in text:
         return True
-    
-    if BOT_NAME_LOWER in text_lower:
-        pattern = r'\b' + re.escape(BOT_NAME_LOWER) + r'\b'
-        if re.search(pattern, text_lower):
-            return True
-    
-    if message.reply_to_message:
-        if message.reply_to_message.from_user and message.reply_to_message.from_user.is_bot:
-            if message.reply_to_message.from_user.username == BOT_USERNAME:
+    if update.message.reply_to_message:
+        reply_to = update.message.reply_to_message
+        if reply_to.from_user and reply_to.from_user.is_bot:
+            if reply_to.from_user.username == BOT_USERNAME:
                 return True
-    
-    if message.chat.type == "private":
+    if update.message.chat.type == "private":
         return True
-    
     return False
 
 async def start(update: Update, context):
-    if not is_addressed_to_me(update):
+    if not is_mentioned(update):
         return
     await update.message.reply_text(
-        f"🎨 {BOT_NAME} здесь!\n\n"
-        f"Обращаться ко мне можно:\n"
-        f"• @{BOT_USERNAME}\n"
-        f"• {BOT_NAME}\n\n"
-        f"Пример: {BOT_NAME}, нарисуй кота в космосе"
+        "🎨 Алекс здесь!\n\n"
+        "Упомяните меня @photo_al_bot, чтобы я создал изображение.\n"
+        "Пример: @photo_al_bot кот в космосе"
     )
 
 async def generate_image(update: Update, context, prompt):
+    if not is_mentioned(update):
+        return
     status_msg = await update.message.reply_text(f"🎨 Генерирую: {prompt[:80]}...")
     img_data = generate_image_bytes(prompt)
     if img_data:
@@ -71,25 +59,20 @@ async def generate_image(update: Update, context, prompt):
         await status_msg.edit_text("❌ Не удалось создать изображение")
 
 async def handle_message(update: Update, context):
-    if not update.message or not update.message.text:
+    if not is_mentioned(update):
         return
     
-    if not is_addressed_to_me(update):
-        return
+    text = update.message.text or ""
+    text = re.sub(f"@{BOT_USERNAME}", "", text).strip()
+    text = re.sub(f"{BOT_NAME}", "", text, flags=re.IGNORECASE).strip()
     
-    text = update.message.text
-    text = re.sub(f"@{BOT_USERNAME}", "", text, flags=re.IGNORECASE)
-    text = re.sub(r'\b' + re.escape(BOT_NAME_LOWER) + r'\b', "", text, flags=re.IGNORECASE)
-    text = text.strip()
-    
-    if not text:
-        await update.message.reply_text(f"Да, {BOT_NAME} на связи! Что сгенерировать?")
+    if not text or text.startswith("/"):
         return
     
     await generate_image(update, context, text)
 
 async def image_command(update: Update, context):
-    if not is_addressed_to_me(update):
+    if not is_mentioned(update):
         return
     prompt = " ".join(context.args) if context.args else None
     if not prompt:
@@ -99,17 +82,16 @@ async def image_command(update: Update, context):
 
 def main():
     app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
-    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("image", image_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     print("=" * 50)
-    print(f"{BOT_NAME} ЗАПУЩЕН")
-    print(f"Реагирует на: @{BOT_USERNAME}, {BOT_NAME}, {BOT_NAME.lower()}")
+    print(f"АЛЕКС ЗАПУЩЕН (режим группы)")
+    print(f"Отвечает на упоминания: @{BOT_USERNAME}")
     print("=" * 50)
     
-    app.run_polling(allowed_updates=["message", "callback_query"])
+    app.run_polling()
 
 if __name__ == "__main__":
     main()

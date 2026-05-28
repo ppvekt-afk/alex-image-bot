@@ -1,0 +1,9 @@
+{
+  "name": "alex-art-bot",
+  "dockerfile": "Dockerfile",
+  "env": {
+    "TELEGRAM_BOT_TOKEN": "",
+    "OPENROUTER_API_KEY": "",
+    "OPENAI_API_KEY": ""
+  }
+}
