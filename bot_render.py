@@ -22,7 +22,7 @@ def health():
     return jsonify({"status": "alive", "service": "alex-image-bot"})
 
 def run_flask():
-    port = int(os.environ.get('PORT', 10000))
+    port = 1000
     logger.info(f"Запуск Flask health check сервера на порту {port}...")
     flask_app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
@@ -81,8 +81,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     print("=" * 50)
-    print("АЛЕКС ЗАПУЩЕН")
-    print(f"Порт из переменной PORT: {os.environ.get('PORT', '10000')}")
+    print("АЛЕКС ЗАПУЩЕН на порту 1000")
     print("=" * 50)
     
     app.run_polling()
